@@ -1,0 +1,474 @@
+---
+title: "Networking Archives: Quantitative History and the Contingent Archive"
+acknowledgments: " Footnote on roles. This work is funded by the AHRC as part of the project Networking Archives (AH/R014817/1). The work we report on here builds on the work of the project team past and present, including Philip Beeley, Arno Bosse, Howard Hotson (PI), Miranda Lewis, Esther van Raamsdonk, and Matthew Wilcoxson. We would especially like to thank XXX for their comments on this paper. For a full list of data contributors to Early Modern Letters Online, see http://emlo-portal.bodleian.ox.ac.uk/collections/?page_id=2259."
+author1: "Yann Ryan"
+author2: "Ruth Ahnert"
+author3: "Sebastian Ahnert"
+output:
+  bookdown::pdf_book:
+    template: main.tex
+    keep_tex: True
+always_allow_html: true
+abstract: "This is the abstract"
+bibliography: comp_hums_piece.bib
+biblio-style: elsarticle-num-names.bst
+documentclass: ceurart
+classoption: twocolumn
+---
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(tidyverse)
+library(tidygraph)
+library(igraph)
+library(DT)
+library(ggraph)
+library(snakecase)
+library(kableExtra)
+library(cowplot)
+location <- read_csv("~/Downloads/EMLO/location.csv", col_types = cols(.default = "c"))
+person <- read_csv("~/Downloads/EMLO/person.csv", col_types = cols(.default = "c"))
+work <- read_csv("~/Downloads/EMLO/work.csv", col_types = cols(.default = "c"))
+
+colnames(location) = to_snake_case(colnames(location))
+colnames(person) = to_snake_case(colnames(person))
+colnames(work) = to_snake_case(colnames(work))
+
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+network = read_delim('/Users/Yann/Documents/non-Github/na_intersecting_chapter/overlaps/emlo_full_network.dat', delim = '\t', col_names = F)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+emlo_dupes = read_delim('/Users/Yann/Documents/non-Github/na_chapter_1/emlo_dupes.csv', delim = ';', col_names = F)
+
+emlo_dupes_to_remove = c(emlo_dupes$X2,emlo_dupes$X3, emlo_dupes$X4) %>% as_tibble() %>% mutate(value = trimws(value)) %>% filter(!is.na(value)) %>% pull(value)
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+abstract_same_dupes = work %>% 
+  filter(standard_gregorian_date>'1590-01-01') %>% 
+  filter(standard_gregorian_date<'1720-01-01') %>%
+  group_by(standard_gregorian_date, author_emlo_id, recipient_emlo_id, abstract) %>% 
+  filter(!is.na(abstract)) %>%
+  filter(str_count(abstract) > 20) %>%
+  add_tally() %>% 
+  filter(n!=1) %>% 
+  arrange(standard_gregorian_date) %>%
+  distinct(standard_gregorian_date, author_emlo_id, recipient_emlo_id, abstract, .keep_all = T) %>%  
+  pull(emlo_letter_id_number)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+possible_dupes = work %>% 
+  filter(standard_gregorian_date>'1590-01-01') %>% 
+  filter(standard_gregorian_date<'1720-01-01') %>%
+  filter(!emlo_letter_id_number %in% emlo_dupes_to_remove) %>% 
+  filter(!emlo_letter_id_number %in% abstract_same_dupes)%>%
+  group_by(standard_gregorian_date, author_emlo_id, recipient_emlo_id) %>% 
+  add_tally() %>% 
+  filter(n!=1) %>% 
+  filter(n<4) %>% group_by(standard_gregorian_date, author_emlo_id, recipient_emlo_id) %>% 
+  summarise(all_cats = paste0(original_catalogue_name, collapse = ';'), emlo_letter_id_number) %>% separate(all_cats, into = c('cat1', 'cat2', 'cat3', 'cat4'), sep = ';') %>% filter(cat1 != cat2) %>%
+  arrange(standard_gregorian_date) %>% 
+  distinct(author_emlo_id, recipient_emlo_id, standard_gregorian_date, .keep_all = T) %>% 
+  pull(emlo_letter_id_number)
+
+bcc_poss_dupes = work %>% 
+  filter(emlo_letter_id_number %in% possible_dupes) %>% 
+  filter(original_catalogue_name == 'Bodleian card catalogue') %>% pull(emlo_letter_id_number)
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+unknowns = person %>% filter(str_detect(person_primary_name_in_emlo,'(?i)unknown') |str_detect(person_primary_name_in_emlo,'(?i)unidentified') ) %>% pull(emlo_person_id)
+
+unknown_letters = work %>% filter(author_emlo_id %in% unknowns | recipient_emlo_id %in% unknowns) %>% pull(emlo_letter_id_number)
+
+unknowns = c(unknowns,c('903934','23155', '6854', '853', '923980', '270', '300827', '901925', '906141'))
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+ network_filtered = network %>% 
+  filter(! X5 %in% unknown_letters) %>% 
+  filter(X3 >16000000) %>% 
+  filter(X3<17000000)
+```
+
+# Introduction
+
+>‘Archives are the ... laboratories of the historian’ [@walsham_social_2016: 9].  
+
+Alexandra Walsham’s metaphor opens her history of early modern archives, gesturing to the way that archives both supply and shape the narratives that historians have written. Archives have become laboratories in another way too, rendering us with the metadata and digitised collections for computational experiments. However, as Walsham rightly notes, scholars have ‘rarely paused to consider how and why these repositories came into being, despite the fact that these processes have fundamentally shaped and coloured our knowledge of the past’ (Walsham 2016: 9) This is as true of the digital historian as it is of the analogue: digital scholarship is good at grappling with the relationship between the part and the whole when the whole is the digital collection or corpara with which they are working, but there remains relatively little work on how representative those archives and collections are of the larger contexts within which they sit. Andrew Piper argues that ‘where the social sciences often speak in terms of “samples” and “bias”, the notion of “representativeness” suggests there is not ultimately some stable, knowable whole against which to limit one’s “bias”’ (Piper 2018: 9).  
+
+Whilst as a field we have moved past the claims that large data sets give us any kind of comprehensiveness (see Jockers 2013: 7–8, and rebuttal Bode 2017), there is still little work that shows how the models developed in the field of computational humanities are affected by the historically specific and contingent histories of the archives they leverage. This paper seeks to demonstrate ways that the contours of archives might be quantitatively described in order to understand the impact of those contingent histories on computational analysis of that archive at scale, and applies the methods to one such union of multiple large collections of correspondence. We suggest that these quantitative measures may be useful for others working with similarly large yet idiosyncratic network datasets.  
+
+## Networking Archives - a case study  
+
+The project from which this work arises, ‘Networking Archives’, seeks to reconstruct epistolary networks by bringing together metadata from multiple early modern archives and catalogues to form a meta-archive of ~450,000 letters. The letter, by design, is a technology of dispersal. The efforts to re-assemble the oeuvre of specific letter writers or communities is behind the tradition of the ‘collected correspondence’, edited volumes that reunite the incoming and outgoing missives of a given individual or individuals. More recently, online repositories such as The Electronic Enlightenment and the Epsilon project have enabled researchers to aggregate correspondence data at scale, in order to begin the task of reconstructing communities of knowledge. The model of aggregation can be extrapolated, to include ever larger and larger bodies of letters. But the same problem remains, that we are dealing with overlapping partial worldviews. The question is how we can model the impact of that partiality on the knowledge we can reconstruct.  
+
+The networks of correspondence which form the basis of this project come from two digital sources: Early Modern Letters Online (EMLO) and a curated, cleaned dataset derived from State Papers Online (SPO).^[This data preparation builds on tools developed by the team members for previous projects, reported on in Hyvönen, Ahnert, Ahnert et al 2019.] EMLO is a union of more than a hundred individual catalogues of correspondence, including a large core of metadata from digitised versions of the Bodleian card catalogue (BCC hereafter). This card catalogue was the product of work by two twentieth century employees and one volunteer in the Bodleian and ultimately based on individual and idiosyncratic acquisitions by the Library over time, resulting in an ‘ad hoc’ and ‘iterative’ set of metadata (Lewis 2013). EMLO has been formed for the purpose of understanding a particular phenomenon—the Republic of Letters—and as such makes no claims to ‘representativeness’ in terms of a more general European network of information. Instead, EMLO is best described as a curated collection based around the correspondence networks of three key groups: a group of early seventeenth-century scholars known as the ‘Dutch Humanists’, a loosely-defined ‘circle’ of correspondents with the mid seventeenth-century polymath Samuel Hartlib at its centre, and the early members of the Royal Society from the 1660s onwards.  
+
+The correspondence in ‘State Papers Online’ (SPO), which is the digitised papers of the State Paper Office, has cohered as the result of a very different set of processes. The State Paper Office was established in 1610 with the aim of collecting the English state’s private and working manuscripts in a single place, and was to become the principal archive and working library for the parliamentary executive. We might therefore expect this ‘official’ record of the English state to present a more unified or coherent worldview than EMLO. In fact, the State Papers are also full of partial or shifting perspectives: individual secretaries often viewed their official documents as ‘private’ and kept them within family archives, and in other cases, private or personal letters have been added to the State Papers for reasons which are still unclear—specifically the Conway and Morton family papers.^[For example the Conway Papers were removed from the State Papers office by Secretary Conway while he was still in office, and only returned by their then owner, John Croker, in 1857.] Document collection in the early years was often chaotic and piecemeal (Marshall 2017). Furthermore, the metadata we have available to us is derived from nineteenth-century printed calendars, which do not include, for example, the Northern department of the Home Office as it existed from the Restoration onwards.  
+
+## Evaluating the Contours of Multiple Archives  
+
+As a record of social interactions between discrete entities, these datasets are naturally suited to analysis using tools from network science—a field concerned with understanding the structure and dynamics of complex networks as a series of mathematical phenomena. While EMLO and SPO have very different histories —one being a modern union catalogue and the other the product of a long and complex institutional history —the elements of contingency that have shaped them result in very similar network topologies. Both contain a small number of highly connected nodes, and a large number of poorly connected nodes. Moreover there exists a continuum of connectivity between these two extremes that renders these networks ‘scale-free’, meaning that in every subregion of the network, on almost every scale, we have a few relatively well connected nodes and many relatively poorly connected ones. A scale-free network can be recognised by plotting the distribution of the number of connections for each node - its ‘degree’ - which in the case of scale-free networks follows a straight line on a double logarithmic plot of this kind (figure \@ref(fig:networkPlot)). 
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+spo_raw = read_delim('/Users/Yann/Downloads/fromto_all_place_mapped_stuart_sorted', delim = '\t', col_names = F )
+```
+```{r message=FALSE, warning=FALSE, include=FALSE}
+spo_mapped_people = read_delim('/Users/Yann/Downloads/people_docs_stuart_200421', delim = '\t', col_names = F) %>% 
+  mutate(unknown = ifelse(str_detect(X2, "(?i)unknown"), 'yes', NA)) %>% mutate(unknown = ifelse(str_detect(X2, "\\[|\\]"), 'yes', unknown)) %>% 
+   mutate(unknown = ifelse(str_detect(X2, "\\?"), 'yes', unknown))
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+spo_network = spo_raw %>% group_by(X1, X2) %>% tally()
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+spo_network_with_degree = spo_raw %>% 
+  group_by(X1, X2) %>% 
+  tally() %>% 
+  graph_from_data_frame(directed = F) %>% 
+  as_tbl_graph() %>% 
+  mutate(degree = centrality_degree(weights = n, mode = 'total')) %>% 
+  mutate(unweighted_d = centrality_degree(weights = NULL, mode = 'total')) %>%
+  mutate(betweenness = centrality_betweenness()) %>% 
+  mutate(size = local_size(mindist = 1)) %>%
+  activate(nodes) %>% 
+  as_tibble()
+```
+```{r message=FALSE, warning=FALSE, include=FALSE}
+spo_network_with_degree %>% group_by(unweighted_d) %>% tally() %>% ggplot() + geom_point(aes(x = unweighted_d, y = n)) + theme_bw() + scale_x_log10() + scale_y_log10() + labs(x = "Unweighted Degree Score", y = "Occurrences")
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE, fig.cap="Degree distribution of EMLO and State Papers Networks, plotted on a double logarithmic scale."}
+emlo_u_degree = emlo_network_with_degree %>% group_by(unweighted_d) %>% tally() %>% mutate(dataset = 'EMLO')
+spo_u_degree = spo_network_with_degree %>% group_by(unweighted_d) %>% tally() %>% mutate(dataset = 'Stuart SP')
+```
+```{r networkPlot, echo=FALSE, message=FALSE, warning=FALSE}
+rbind(emlo_u_degree, spo_u_degree)%>% ggplot() + geom_point(aes(x = unweighted_d, y = n)) + theme_bw() + scale_x_log10() + scale_y_log10() + labs(x = "Unweighted Degree Score", y = "Occurrences") + facet_wrap(~dataset, ncol = 2)
+```
+
+So what underlies this broad structural similarity, and how does it play out across the different dimensions of our data? To tease this apart we have analysed the contours of our respective archives along five dimensions: size-distribution, space, time, absence, and interconnectedness. Each of these has helped reveal the way that the respective histories of the archive can impact analyses. We do not have space to go into all five of these here,  but  aspects of size-distribution, absence and interconnectedness are particularly instructive in explaining the structure observed in figure \@ref(fig:networkPlot).  
+
+The reason for the topology of the networks that we see in figure 1 above can be gleaned in large part by understanding the letter distribution across its constituent parts. In the case of EMLO that means understanding the  number of letters per catalogue. It is made up of about 110 constituent catalogues, and the distribution of the number of letters across these catalogues is heavily skewed with 80% of the letters coming from the top twenty-three catalogues (21%). Moreover the nature of these respective catalogues has a large impact on the contours of those constitutive parts: a correspondence collection usually, though not always, prioritises an individual at its centre. While most real-world networks tend to cohere around a series of key hubs, this phenomenon is exaggerated in the EMLO data because it is in effect sampled from the perspective of the hubs, which is not dissimilar to the way that many traditional datasets used for SNA are based on surveys or responses to a questionnaire which relies of participants listing their connections (see Wasserman and Faust 1994: 33-35).  
+
+Figure \@ref(fig:networkPlot) shows that the degree distribution of the State Papers Stuart network is strikingly similar to that derived from EMLO’s data. We could also describe this network as in effect a collection of ego networks (the name for a network derived from the perspective of a single node), as it is in essence the worldview of the principal secretaries of state plus a limited set of other nodes. Other analysis has shown that networks based on earlier Tudor correspondence had similar degree distributions, as most of the connections are assigned to the small number of individuals who formed the ‘gravitational centre’ of the English state (Ahnert and Ahnert, 2019: 32).  
+
+The topology however is also a product of missing data. Absence in our data comes in several categories. First there are the missing fields within the data that we have. Furthermore, we have found that the patterns vary not only between archives, but also between catalogues within EMLO. Because the catalogues which make up EMLO come from a variety of sources, the metadata available to us varies in type and quality, despite extensive standardisation and reconciliation. The missing information is systematic rather than random, and there is a strong correlation between missing data in some pairs of fields: records missing recipients are more likely to be missing authors, for example.  
+
+The Stuart SPO also has missing data but it is not always directly comparable: no data on letter destination has been recorded in SPO, and there is very little truly ‘missing’ author or recipient data in SPO, though there are numerous inferred, ambiguous or unidentified person text strings. Most missing or unknown dates have been given a date range, sometimes spanning the lifetime of the correspondents in the letter, or a period of rule. Of the approx. 177,000 records in the Stuart SPO data, 34,829 have an estimated date range rather than a single date (figure X (b). 33,386 of these have a date range of one year or less, and 21,311 have a date range of ten days or less. This can be visualised with years represented by  vertical bars, and the mean date range by colour, with ‘hotter’ colours indicating less accurate dates (figure X (c). This plot clearly shows a progression from less to more accurate data over the course of the seventeenth century.  
+
+This fine-grained data on the ‘known’ partiality of our networks has helped us add necessary caveats or controls to our results: for example, knowing that the SPO and BCC data usually does not contain information on place of destination means that our analysis of the geographic origins and transmission of intelligence or information  takes that into account. Similarly, temporal analysis of the formation of these networks must allow for the fact that early records are more likely to be missing either a sender or recipient.  
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(reshape2)
+library(tidyverse)
+
+unknowns = person %>% filter(str_detect(person_primary_name_in_emlo,'(?i)unknown') |str_detect(person_primary_name_in_emlo,'(?i)unidentified') ) %>% pull(emlo_person_id)
+
+unknown_letters = work %>% filter(author_emlo_id %in% unknowns | recipient_emlo_id %in% unknowns) %>% pull(emlo_letter_id_number)
+
+unknowns = c(unknowns,c('903934','23155', '6854', '853', '923980', '270', '300827', '901925', '906141'))
+
+all = work %>% 
+          arrange(desc(standard_gregorian_date)) %>% 
+          mutate(standard_gregorian_date = ifelse(standard_gregorian_date>'8888-01-01', NA, standard_gregorian_date)) %>%
+          mutate(standard_gregorian_date = ifelse(standard_gregorian_date=='10000-01-11', NA, standard_gregorian_date)) %>%
+          mutate(author = ifelse(author_emlo_id %in% unknowns, NA, author)) %>%
+          mutate(recipient = ifelse(recipient_emlo_id %in% unknowns, NA, recipient)) %>%
+          mutate(origin_name = ifelse(origin_emlo_id == 681, NA, origin_name)) %>% 
+          mutate(destination_name = ifelse(destination_emlo_id == 681, NA, destination_name)) %>%
+          dplyr::select(Destination = destination_name, Origin = origin_name, Date = standard_gregorian_date, Recipient = recipient, Author = author) %>% is.na %>% melt()  %>% ggplot(data = .,
+           aes(x = Var2,
+               y = Var1)) +
+    geom_raster(aes(fill = value), alpha = .9) +
+    theme_minimal() + 
+    theme(axis.text.x  = element_text(angle=45, vjust=0.5)) + 
+    labs(x = NULL,
+         y = "Rows / observations") + 
+  labs(fill = 'Missing:') + 
+  scale_fill_manual(values = c('gray90', 'gray20')) + theme(text = element_text(family = 'Times', size = 8)) + theme(legend.position = 'bottom')
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+all = work %>% 
+          arrange(desc(standard_gregorian_date)) %>% 
+          mutate(standard_gregorian_date = ifelse(standard_gregorian_date>'8888-01-01', NA, standard_gregorian_date)) %>%
+          mutate(standard_gregorian_date = ifelse(standard_gregorian_date=='10000-01-11', NA, standard_gregorian_date)) %>%
+          mutate(author = ifelse(author_emlo_id %in% unknowns, NA, author)) %>%
+          mutate(recipient = ifelse(recipient_emlo_id %in% unknowns, NA, recipient)) %>%
+          mutate(origin_name = ifelse(origin_emlo_id == 681, NA, origin_name)) %>% 
+          mutate(destination_name = ifelse(destination_emlo_id == 681, NA, destination_name)) %>%
+          dplyr::select(Destination = destination_name, Origin = origin_name, Date = standard_gregorian_date, Recipient = recipient, Author = author) %>% is.na %>% melt() 
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+emlo_unknown_chart = all %>% 
+  group_by(Var2, value) %>% 
+  tally() %>% 
+  mutate(value = ifelse(value == 'FALSE', 'present', 'missing')) %>% 
+  ggplot() + 
+  geom_col(aes(x = Var2, y = n, fill = value), color = 'black', lwd = .1) +  
+  theme_minimal() + 
+  scale_fill_manual(values = c('gray90', 'gray20')) + 
+  theme(text = element_text(family = 'Times', size = 8)) + 
+  theme(legend.position = 'bottom') + 
+  labs(y = 'observations') + 
+  theme(legend.title = element_blank(), axis.title.x = element_blank())
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+spo_unknowns = spo_raw %>% left_join(spo_mapped_people, by = c('X1' = 'X1')) %>% left_join(spo_mapped_people, by = c('X2.x' = 'X1'))
+
+spo_unknowns = spo_unknowns %>% select(X3.x, X4.x, X6.x, unknown.x, unknown.y) %>% 
+  rename(author = unknown.x, recipient = unknown.y, date = X4.x, origin_location = X6.x) %>% 
+  mutate(author = ifelse(is.na(author), 'present', 'missing')) %>% 
+  mutate(recipient = ifelse(is.na(recipient), 'present', 'missing')) %>%
+  mutate(date_range = ymd(date) - ymd(X3.x)) %>% 
+  mutate(date = ifelse(date_range > 0, 'missing', 'present'))
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+spo_unknown_chart = spo_unknowns %>% 
+          arrange(desc(X3.x)) %>% 
+          mutate(author = ifelse(author == 'missing', NA, author)) %>% 
+          mutate(recipient = ifelse(recipient == 'missing', NA, recipient)) %>%
+          mutate(origin_location = ifelse(origin_location == "-", NA, origin_location)) %>% 
+   mutate(date = ifelse(date == "missing", NA, date)) %>% 
+          dplyr::select(Origin = origin_location, Date = date) %>%
+  is.na %>% melt() %>% 
+  group_by(Var2, value) %>% 
+  tally() %>% 
+  mutate(value = ifelse(value == 'FALSE', 'present', 'missing (or date range)')) %>% 
+  ggplot() + 
+  geom_col(aes(x = Var2, y = n, fill = value), color = 'black', lwd = .1) +  
+  theme_minimal() + 
+  scale_fill_manual(values = c('gray90', 'gray20')) + 
+  theme(text = element_text(family = 'Times', size = 8)) + 
+  theme(legend.position = 'bottom') + 
+  labs(y = 'observations') + 
+  theme(legend.title = element_blank(), axis.title.x = element_blank())
+
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(lubridate)
+options(scipen = 99999)
+spo_dates_chart = spo_raw %>% mutate(date_range = ymd(X4) - ymd(X3)) %>% 
+ # filter(date_range>0) %>%
+  filter(date_range<366) %>%
+  filter(date_range>10) %>% 
+  mutate(year = year(ymd(X3))) %>%
+    filter(year<1700) %>% 
+  filter(year>1600)%>%
+  group_by(year) %>%
+  tally(mean(as.numeric(date_range))) %>% 
+  mutate(year = as.character(year)) %>%
+  ggplot(aes(x = as.numeric(year), y = 1, fill = n)) + geom_col(alpha = .9) + scale_fill_viridis_c(option = 'A') + theme_void() + labs(y = NULL, fill = 'Average date range') + theme(axis.text.x = element_text()) + theme(panel.background = element_rect(fill = 'gray40')) + theme(legend.position = 'bottom')
+```
+
+```{r missingPlot, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Missing data in EMLO and SPO (Stuart).  A shows the missing portions of key fields in EMLO. B shows missing sections of the origin field, and the section of SPO where the date is given as a range rather than a specific date. Figure c shows this date range data further broken down: ‘warmer’ colours indicate a larger mean range for that year."}
+plot_grid(plot_grid(emlo_unknown_chart, spo_unknown_chart, labels = c('(a)', '(b)'), label_fontfamily = 'Times', vjust = 1), spo_dates_chart, ncol = 1, rel_heights = c(.7, .3), labels = c('','(c)'), label_fontfamily = 'Times', hjust = -.1, vjust = -1)
+```
+
+## Missing Data and Network Analysis  
+
+Recent years have seen a number of projects in the computational humanities using network theory as the basis for historical analysis (Ahnert and Ahnert 2019; Edmondson and Edelstein 2019; Van Vugt 2017). Many of these are based on incomplete data. Because historians are used to working with partial archives, there is some well-founded scepticism about the impact of such absence on large-scale computational analysis. However, in networks science and cognate fields, there is a more established discourse and methodology around the nature and likely impact of incomplete data. For example, missing social network analysis data can be the result of boundary specification problems (difficulties with establishing the parameters of the network) or data collection inaccuracy (incomplete or biased surveys, for example). Studies have found that these types of missing data are likely to result in individual missing nodes or edges (Kossinets 2006: 248). Our data, by comparison, is more likely to have missing hub nodes along with most of their connections, because entire personal archives have been lost, or are currently unavailable. As the figures above have shown, data derived from archives like our are also likely to be missing or inaccurate years or year ranges because longitudinal historical data can be interrupted by war, change in executive, or bureaucratic practices. However, there is little understanding of the impact of this missing data on network results. Intuitively, one might assume that network metrics based on partial archives are therefore unreliable. It is possible, however, to quantitatively test this assumption.  
+
+Researchers have previously used quantitative methods to estimate the effect of missing nodes and edges on network measures (Smith and Moody 2013; Smith, Moody, and Morgan 2017). Costenbader and Valente, for example, analysed the sensitivity of eleven centrality measures using social networks derived from questionnaire results and found that eigenvector centrality was particularly robust as a measure of centrality using sampled data (Costenbader and Valente 2003: 299). To understand the effect that missing network information might have on our network, we adapted a technique developed by Matthew Peeples for measuring the sensitivity of network measures to random node removal from archaeological networks (Peeples 2017). This technique involves randomly removing progressively larger random samples from the network, and comparing the results to those found in the full network. Using this, we can infer how various types of gaps in the data might affect the rankings of individual nodes (figure 3).  
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+network = read_delim('/Users/Yann/Documents/non-Github/na_intersecting_chapter/overlaps/emlo_full_network.dat', delim = '\t', col_names = F)
+```
+
+```{r}
+ network_filtered = network %>% filter(! X5 %in% possible_dupes) %>% 
+  filter(!X5 %in% emlo_dupes_to_remove) %>% 
+  filter(! X5 %in% unknown_letters) %>% 
+  filter(! X5 %in% abstract_same_dupes) %>% 
+  filter(X3 >16200000) %>% 
+  filter(X3<16700000)
+```
+
+
+```{r missingData, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE, fig.cap="Effect of random letter removal on degree ranks. We removed progressively larger random samples of letters from the full network, recalculated two key network measurements, and then plotted the resulting Spearman’s rank correlation coefficient between the original and sampled network (the simulation was run 100 times). We found that degree rank correlations are remarkably robust to random letter removals from the network."}
+full_edges = network_filtered
+
+graphmatr = graph_from_data_frame(full_edges %>%
+      distinct(X1, X2), directed = F)
+
+bw.g <- igraph::degree(graphmatr, mode = 'total')
+
+nsim <- 3
+out.mat <- matrix(NA, nsim, 99)  # create matrix for output and then name
+colnames(out.mat) <- paste0("S", 1:99)
+    
+for(j in 1:99){
+  
+  for(i in 1:nsim){
+    
+      sample_edges = full_edges %>% 
+      sample_frac((100-j)/100, replace = F) %>%
+      distinct(X1, X2)
+    
+    sub.graphmatr = graph_from_data_frame(sample_edges)
+    
+    temp.stats = igraph::degree(sub.graphmatr, mode = 'total') %>% tibble::enframe()
+    
+    temp.stats$full = bw.g[temp.stats$name]
+    
+    out.mat[i, j] = suppressWarnings(cor(temp.stats$value, temp.stats$full,
+                method = "spearman"))
+  }
+  
+  
+}
+  
+out.mat %>% 
+  as_tibble() %>% 
+  mutate(instance = 1:nrow(out.mat)) %>% 
+  pivot_longer(names_to = 'percent_out', values_to = 'value', cols = 1:99) %>% 
+  mutate(percent_out = str_remove(percent_out, "S")) %>%  
+  mutate(percent_out = as.numeric(percent_out)) %>% 
+  ggplot() + geom_line(aes(x = percent_out, y = value, group = instance), alpha = .1) + 
+  theme_minimal() + labs(x = 'Percentage Removed', y = 'Spearmans Rho') + 
+  coord_cartesian(ylim = c(0,1))
+
+```
+
+What we have found is that even with very large amounts of letters removed, for those remaining nodes, there remains a strong correlation between the original ranked score of a node and its rank in the random sub-sample of the network.  The model shows that individuals who are not removed are very likely to remain in similar ranked positions for degree scores despite significant missing data. Degree is a key measurement of a node’s centrality to a network and we surmise that network analysis of correspondence in large historical collections yields results that are remarkably robust to missing data, likely because we have multiple letters—evidence of links—for many of the node relationships.[Seb, Yann, could we insert something here about why we think this is - what it does give us confidence about, and where we still need to exercise caution].  
+
+This robustness is partially because of another phenomenon that we have found to be the result of working with many combined catalogues: the emergence of secondary ‘informal’ catalogues, found at the intersections between the primary ego networks. Like the measure of betweenness centrality— a metric which gives a score to each node based on the number of times it is traversed on the shortest paths between every other pair of nodes and which is often used to find individuals with structural importance but not necessarily the highest total connections—looking at overlapping or intersecting neighbourhoods helps us to find individuals who bridge multiple overlapping ego networks, whose significance was harder to derive before the creation of union catalogues and meta-archives such as EMLO.  
+
+## Intersections  
+
+One of the key aims of the Networking Archives project is to examine the extent to which the multiple overlapping ego networks of the EMLO archive are intermeshed internally, and to what extent they in turn overlap with the political archive of SPO. The reconciliation of EMLO and SPO is still being completed so the following results are based on EMLO only.  
+
+The purpose for which EMLO was originally created means that the catalogues of correspondence are deeply enmeshed and overlapping. Even when the individuals at the centre of catalogues are not directly connected by an edge, it is likely they will have correspondents in common. We exploit this fact to uncover or highlight ‘emergent’ ego networks of individuals whose correspondence has not been consolidated into a single collection. To do this, we developed a tool that finds the intersecting set of correspondents for each pair of individuals in the network—whether they corresponded with each other or not (figure @ref(fig:dummy)). We have found that in partial networks, individuals with a high number of these ‘shared correspondents’ are often important figures whose contributions to their particular networks have been overlooked. To find these emergent informal catalogues, we looked for individuals who a) had many significant intersecting correspondents, b) did not have their own catalogue or edited collection and c) could be found across numerous catalogues (table @ref(tab:overlapTable)  
+
+
+```{r dummy, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="The Overlaps Tool developed by Sebastian Ahnert lists the overlapping set (C, D, E) of neighbours of A and B for each pair of nodes in the network—whether or not A and B are also direct neighbours.", fig.height=2.6, fig.width=2.6}
+
+dummy_net = read_delim('dummy.csv', delim = '\t', col_names = F)
+
+dummy_net %>% 
+  graph_from_data_frame() %>% 
+  as_tbl_graph() %>% 
+  mutate(degree = centrality_degree(mode = 'total')) %>%
+  ggraph('kk') + 
+  geom_edge_link(alpha = .2) + 
+  geom_node_point(size = 4, pch = 21, color = 'black', fill = 'gray70') + 
+  geom_node_text(aes(label = ifelse(degree >1, name, NA)), repel = T) + 
+  theme_void()
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+to_remove_list = read_delim('/Users/Yann/Documents/GitHub/de-duplications/to_remove_list.csv', delim = '\t', col_names = T) %>% pull(value) %>% as.character()
+
+network = read_delim("/Users/Yann/Documents/non-Github/ego_networks/emlo_full_network.dat", delim = '\t', col_names = F)
+full_edges = network %>% 
+  filter(! X5 %in% to_remove_list) %>% 
+  filter(!is.na(X1)) %>% 
+  filter(!is.na(X2)) %>% 
+  filter(!X1 %in% c('903934','23155', '6854', '853', '923980', '270', '300827', '901925', '906141')) %>% 
+  filter(!X2 %in% c('903934','23155', '6854', '853', '923980', '270', '300827', '901925', '906141')) %>% 
+  dplyr::select(X1, X2)
+
+
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+load('metrics')
+overlap_totals = read_csv('/Users/Yann/Documents/GitHub/Overlaps/overlaps_totals.csv') %>% mutate(X1 = as.character(X1)) %>% rename(overlaps = `0`)
+
+# total_catalogues = rbind(work_filtered %>% 
+#                            dplyr::select(emlo_id = author_emlo_id, original_catalogue_name), work_filtered %>% 
+#                            dplyr::select(emlo_id = author_emlo_id, original_catalogue_name))  %>% 
+#   distinct(emlo_id, original_catalogue_name) %>% 
+#   group_by(emlo_id) %>% 
+#   tally() %>% 
+#   filter(!is.na(emlo_id))
+
+
+total_catalogues = rbind(network %>% 
+                           dplyr::select(X1, X5), network %>% 
+                           dplyr::select(X1 = X1, X5)) %>% 
+  mutate(X5 = as.character(X5)) %>% 
+  left_join(work %>% 
+              dplyr::select(emlo_letter_id_number, original_catalogue_name), by = c('X5' = 'emlo_letter_id_number')) %>% 
+  distinct(X1, original_catalogue_name) %>% 
+  group_by(X1) %>% 
+  tally() %>% 
+  filter(!is.na(X1)) %>% 
+  rename(emlo_id = X1) %>% 
+  mutate(emlo_id = as.character(emlo_id))
+```
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+add_metrics = full_edges %>% 
+  group_by(X1, X2) %>% 
+  tally() %>% 
+  graph_from_data_frame(directed = F) %>% 
+  as_tbl_graph() %>% 
+  mutate(between = centrality_betweenness()) %>% 
+mutate(eigen = centrality_eigen()) %>% 
+  mutate(degree = centrality_degree(mode = 'total')) %>%
+  activate(nodes) %>% 
+  as_tibble() %>% 
+  left_join(overlap_totals, by = c('name' = 'X1'))
+```
+
+```{r overlapTable, echo=FALSE, message=FALSE, warning=FALSE}
+
+metrics %>% 
+  full_join(add_metrics, by = c('emlo_id' = 'name')) %>% 
+  mutate(has_catalogue = ifelse(is.na(total_size), 'no', 'yes')) %>%
+  arrange(desc(overlaps)) %>% 
+  left_join(person, by = c('emlo_id' = 'emlo_person_id')) %>% 
+left_join(total_catalogues, by = 'emlo_id') %>%  
+  dplyr::select(Name = person_primary_name_in_emlo, Overlaps = overlaps, Degree = degree, Catalogues = n, has_catalogue) %>% 
+  filter(! Name %in% c('Dutch Church in London, Ministers and Elders of the', 'London, consistory of the Dutch Church in', 'Winthrop, John')) %>% 
+  filter(Degree > 20) %>% select(-has_catalogue) %>% head(20) %>% kable( booktabs = T, caption = "Individuals in EMLO, arranged by number of times they share at least two correspondents with another individual. Individuals without their own catalogue are highlighted in gray") %>% 
+  kable_styling() %>%  
+  row_spec(c(6:8,14, 16, 17, 18, 20), bold = T, background = "mygray")
+
+```
+
+From these criteria, the seventeenth-century Scottish minister John Dury emerged as an interesting case study. Despite his prominent work as a pamphlet writer, minister, diplomat, tutor, and theologian, there is no single ‘Dury Archive’:  John Dury left many of his papers with Samuel Hartlib when he travelled on the continent, and therefore the largest single collection of Dury material can be found within the Hartlib papers, held by Sheffield University. Because of this, he does not have a centralised collection of correspondence in EMLO, although parts of it have been collected in printed editions elsewhere (Greengrass: 39). Only a small number (1,372) of Dury’s total surviving letters are listed in EMLO,  spread across a number of catalogues, and therefore a  ‘standard’ quantitative analysis of Dury’s correspondence might underestimate his importance to the network of which he forms a part.  
+
+With a union catalogue like EMLO we can infer the centrality of individuals even without a centralised catalogue. As well as appearing as an author and recipient in Hartlib’s catalogue, Dury can be found in eight others on EMLO, albeit in much smaller numbers. In this way Dury’s centrality is no longer defined by his appearance in a single catalogue, but by his own centrality, inferred from his appearance across other collections, for example the three letters found in a printed edition of the letters of Joseph Mede, or the two ‘lost letters’ of his to Robert Boyle found in a list compiled by William Wotton shortly after Dury’s death (Mede 1677: 804, 865-65, 866-67;  Hunter, Clericuzio and Principe: 246) Like scientists inferring the presence of black holes by their absence and the behaviour of objects around them, looking at individuals and their overlaps allows us to establish a sense of their contribution to the network, even when their correspondence has not been systematically collected in one place.  
+
+For Dury, this matches up with what we know about him as a figure within a European intellectual network. A prominent Irenicist (working towards a peaceful Protestant union of churches), Dury was in regular contact with theologians, scholars and diplomats throughout Europe. Dury spent much of his life on the move: living or travelling through the Netherlands, Sweden, Poland, Germany, and Switzerland, communicating state affairs to diplomats in England and moving on when he had established contacts, aiming to continue the correspondence by letter after he had left. His mobility and continental connections meant that he acted as a ‘bridge’ in a European network of communication centred around Samuel Hartlib, as well sending intelligence to Cromwell’s secretary of state, John Thurloe, in the mid-1650s. Finding Dury amongst established archives, and specifically linking evidence of his correspondence across multiple catalogues, we can more fully exploit the surviving records of his contributions, even though most of his correspondence is either lost or not available as structured metadata.  
+
+## Conclusion  
+
+The growth of the use of network theory in the humanities over the past decade has been accompanied by self-reflection on its use: at one extreme, it has been used to make longue duree claims about hugely complex historical forces (Schich et al. 2014), while at the same time other researchers have, quite rightly, pointed out that networks based on assembled ego networks may tell us more about the collection practices than about a historical phenomenon more generally (Weingart 2011). This paper has put forward some techniques for understanding and working with partial network data as found in historically contingent archives, in a way which we believe strengthens the epistemological underpinnings of historical network analysis.  
+
+Some of the unknown data is ‘known’: partially missing people, dates or place names which we can measure, understand and visualise using the methods as described above. The much larger part of the missing data is truly unknown: destroyed, intercepted or unavailable archives, not to mention the part of the network reliant on oral exchange. Despite this, our findings suggest that network rankings stay remarkably stable when large parts of the network are removed, either at random or by removing entire catalogues—we can also infer that this would be the case were additional catalogues added to a meta-collection.  
+
+Crucially, the method allows us to reconstruct likely connections in incomplete, historically contingent collections. Quantitative studies of the Republic of Letters have so far focused on individuals whose collections have survived in a single archive or have been assembled afterwards in a single repository.^[The Mapping the Republic of Letters project, for example, has taken as case studies Athanasius Kircher and John Locke. The bulk of the former’s correspondence is preserved in the Archives of the Pontifical Gregorian University in Rome, and the latter’s was assembled as a multi-volume scholarly edition by Oxford UP,  and made available digitally on the Electronic Enlightenment website.] This may have the effect of biasing results towards letters received by geographically stable nodes. John Dury’s centrality to the network, on the other hand, was one based on breadth rather than overall strength, and is harder to measure because of the geographic dispersal of his letters: establishing network strengths across catalogues helps to find these intersecting nodes, and counteract the natural bias towards histories based on canonical individuals as found in formal collections or nineteenth-century printed editions.  
+
+The adoption of linked open data means that access to linked discrete archives is set to increase, and existing datasets will continue to expand. The ‘Networking Archives’ project, for example, will link together three large datasets, and one of these, EMLO, is continually expanding its metadata with new catalogues of correspondence. Our understanding of John Dury is a direct benefit of this: almost seventy additional letters by John Dury found in the Stuart State Papers Online will, when linked to the existing metadata, help the project to understand more fully John Dury’s role as a provider of intelligence to the English state. This presents an enormous opportunity: each new addition leads to further intersections  and helps us to understand both the added network and the entire network as a whole.  
+
