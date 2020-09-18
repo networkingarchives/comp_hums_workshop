@@ -6,4 +6,5 @@ This github repo contains the R markdown used to build the LaTeX file for the pa
 
 We are grateful to Matthew Peeples for permission to build on his suggested method for measuring network metric robustness. A complete version of the code used will be released alongside a longer-form paper.
 
+[More information on the Networking Archives project](https://networkingarchives.org/)
 
